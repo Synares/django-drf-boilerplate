@@ -1,0 +1,8 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "{{ cookiecutter.project_slug }}/requirements/"
+    schedule:
+      interval: "daily"
+    reviewers:
+      - "Synares/backend"

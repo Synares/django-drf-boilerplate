@@ -1,0 +1,115 @@
+version: 2
+
+references:
+  image_name: &image_name organization-name/project-name
+
+jobs:
+  python_linter:
+    docker:
+      - image: circleci/python:3.8.0b1-stretch
+    steps:
+      - checkout
+      - run: sudo pip install black==20.8b1 cookiecutter
+      - run: git config --global user.email "admin@ckl.io"
+      - run: git config --global user.name "CircleCI"
+      - run: cookiecutter . -o generated_boilerplate --no-input
+      - run: black --check generated_boilerplate/
+      - store_artifacts:
+          path: generated_boilerplate/django_drf_boilerplate
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./image.tar
+            - generated_boilerplate/django_drf_boilerplate
+  build:
+    machine:
+      docker_layer_caching: true
+    environment:
+      IMAGE_NAME: *image_name
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t $IMAGE_NAME:latest \
+              -f /tmp/workspace/generated_boilerplate/django_drf_boilerplate/Dockerfile \
+              /tmp/workspace/generated_boilerplate/django_drf_boilerplate
+      - run:
+          name: Archive Docker image
+          command: docker save -o image.tar $IMAGE_NAME
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./image.tar
+  tests:
+    machine:
+      image: circleci/classic:201808-01
+    environment:
+      IMAGE_NAME: *image_name
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - run:
+          name: Load archived Docker image
+          command: docker load -i /tmp/workspace/image.tar
+      - run: |
+          docker-compose \
+            -f /tmp/workspace/generated_boilerplate/django_drf_boilerplate/docker-compose.test.yml up \
+            --exit-code-from web
+      - run: cp /tmp/workspace/generated_boilerplate/django_drf_boilerplate/coverage.xml .
+      - run: cp -rf /tmp/workspace/generated_boilerplate/django_drf_boilerplate/ .
+      - store_artifacts:
+          path: ./coverage.xml
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./coverage.xml
+            - ./django_drf_boilerplate
+  analysis_codeclimate:
+    docker:
+      - image: circleci/python:3.8.0b1-stretch
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run:
+          command: |
+            curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
+            chmod +x ./cc-test-reporter
+      - run: cp -rf /tmp/workspace/django_drf_boilerplate .
+      - run: cp /tmp/workspace/coverage.xml ./django_drf_boilerplate/coverage.xml
+      - run:
+          name: Upload coverage results to Code Climate
+          command: |
+            (cd django_drf_boilerplate/; ../cc-test-reporter format-coverage -t coverage.py -o codeclimate.json)
+            (cd django_drf_boilerplate/; ../cc-test-reporter upload-coverage -i codeclimate.json)
+      - store_artifacts:
+          path: django_drf_boilerplate/codeclimate.json
+
+workflows:
+  version: 2
+  untagged-build:
+    jobs:
+      - python_linter:
+          filters:
+            branches:
+              ignore: /hotfix.*/
+      - build:
+          requires:
+            - python_linter
+          filters:
+            branches:
+              ignore: /hotfix.*/
+      - tests:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore: /hotfix.*/
+      - analysis_codeclimate:
+          requires:
+            - tests
+          filters:
+            branches:
+              ignore: /hotfix.*/
